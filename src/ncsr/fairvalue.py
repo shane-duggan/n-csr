@@ -20,8 +20,9 @@ import re
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
 
+from .divtables import tables_for
 from .htmltables import ParsedDocument, Table
-from .statements import normalize_value
+from .normalize import normalize_value
 
 #: A header cell naming a hierarchy level.
 _LEVEL = re.compile(r"Level\s*([123])\b", re.I)
@@ -131,7 +132,7 @@ def extract_hierarchy(
     document: ParsedDocument, series_id: str, start: int, end: int
 ) -> Optional[Hierarchy]:
     """Parse the fair-value hierarchy table in a character range, if present."""
-    for table in document.tables_within(start, end):
+    for table in tables_for(document, start, end):
         grid = table.grid(document.text)
         levels, total_column, header_row = _level_columns(grid)
         if not levels:

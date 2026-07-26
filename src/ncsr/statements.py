@@ -18,8 +18,9 @@ import re
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
 
+from .divtables import tables_for
 from .htmltables import ParsedDocument, Table
-from .normalize import fund_key
+from .normalize import fund_key, normalize_value
 
 #: Section types whose tables are line-item statements.
 STATEMENT_SECTIONS = frozenset(
@@ -33,29 +34,6 @@ STATEMENT_SECTIONS = frozenset(
 
 #: Rows scanned for fund names before giving up on a table.
 _HEADER_SCAN_ROWS = 4
-
-_NUMERIC = re.compile(r"^\(?\s*-?[\d,]*\.?\d+\s*\)?$")
-_STRIP = re.compile(r"[\s$,]")
-
-
-def normalize_value(cell: str) -> Optional[str]:
-    """Return a cast-friendly numeric string, or None if not a number.
-
-    Accounting parentheses become a leading minus: ``(1,234)`` -> ``-1234``.
-    """
-    text = cell.strip()
-    if not text:
-        return None
-    negative = text.startswith("(") and text.endswith(")")
-    cleaned = _STRIP.sub("", text.strip("()"))
-    if not cleaned or not _NUMERIC.match(cleaned.lstrip("-")):
-        return None
-    try:
-        float(cleaned)
-    except ValueError:
-        return None
-    return f"-{cleaned}" if negative and not cleaned.startswith("-") else cleaned
-
 
 @dataclass(frozen=True)
 class LineItem:
@@ -134,7 +112,7 @@ def extract_line_items(
     when the table header names no fund.
     """
     items: List[LineItem] = []
-    for table in document.tables_within(start, end):
+    for table in tables_for(document, start, end):
         mapping, header_row = _column_map(table, document.text, series)
         if not mapping and len(section_series) == 1:
             mapping = _single_fund_columns(table, document.text, section_series[0])

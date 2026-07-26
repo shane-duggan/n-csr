@@ -150,10 +150,23 @@ def test_single_fund_sections_use_section_attribution():
     assert {i.series_id for i in items} <= set(analysis.header.series)
 
 
-def test_div_layout_filings_yield_nothing_rather_than_wrong_rows():
-    """Four filings lay financial data out in <div> rather than <table>.
-    Extraction must decline rather than invent rows -- see README."""
-    for label in ("gugg", "templeton", "blackrock", "victory"):
-        document, header = load(BY_LABEL[label])
-        analysis = analyze(document, header)
-        assert _line_items(analysis, parse(document)) == []
+def test_div_layout_filings_are_parsed_via_geometry():
+    """Four filings lay financial data out in absolutely positioned <div>s.
+    Tables are synthesized from the geometry, so extraction works against them
+    through the same code path."""
+    document, header = load(BY_LABEL["blackrock"])
+    parsed = parse(document)
+    analysis = analyze(document, header)
+    assert parsed.boxes, "expected positioned fragments"
+
+    # The financial statements themselves carry no markup tables, even though
+    # the cover pages of the filing do.
+    schedules = [
+        s for s in analysis.sections
+        if s.section_type == "schedule_of_investments" and len(s.series_ids) == 1
+    ]
+    assert schedules
+    biggest = max(schedules, key=lambda s: s.end - s.start)
+    assert not parsed.tables_within(biggest.start, biggest.end)
+    assert parsed.boxes_within(biggest.start, biggest.end)
+    assert _line_items(analysis, parsed)

@@ -19,7 +19,7 @@ Scope is currently annual open-end N-CSR. N-CSRS is classified and carries
 scope by decision.
 
 ```
-python3 -m pytest -q                          # 182 tests
+python3 -m pytest -q                          # 183 tests
 python3 -m ncsr.cli DOC.htm HEADER.hdr        # manifest as JSON
 python3 -m ncsr.cli DOC.htm HEADER.hdr --emit ./out
 python3 -m ncsr.cli --ddl s3://bucket/ncsr    # Iceberg DDL
@@ -47,6 +47,7 @@ string, as the SEC requires one.
 | `statements` | Line items from the financial statements |
 | `holdings` | Schedule-of-investments rows, legend resolution, reconciliation |
 | `fairvalue` | Fair-value hierarchy table; Level 1/2/3 per asset class |
+| `divtables` | Reconstructs tables from absolutely positioned text |
 | `emit` | Persist evidence, rows, and the commit marker |
 
 `analyze()` returns a `FilingAnalysis` whose `manifest()` is the payload written
@@ -251,6 +252,30 @@ Two distinctions the extractor preserves:
   beginning "Total"; taking the first reported an asset-class subtotal as the
   fund-wide figure.
 
+## Positioned-div layout
+
+Four filings deliver their financial statements as a PDF-to-HTML conversion:
+every word is its own `position:absolute` div and there is no `<table>`
+anywhere. BlackRock uses 92,357 divs against 1,750 cells.
+
+Rather than a second extraction path, `divtables` synthesizes ordinary `Table`
+objects from the geometry, so `statements`, `holdings` and `fairvalue` work
+against those filings unchanged. Three properties of the layout carry it:
+
+- **Lines** are fragments sharing a vertical position within a tolerance.
+  Superscript footnote markers sit a few pixels below their line and have to
+  join it rather than forming a line of their own.
+- **Dot leaders** separate a description from its figures. They are the only
+  column separator this layout has, and they are unambiguous.
+- **Pages are two-up.** One physical line carries two holdings side by side, so
+  a line yields a record per dot-leader run, not one record per line.
+
+Two details cost real values before they were handled: a bare currency symbol
+sits *between* a figure group's members and must not be read as the start of the
+next record, and the conversion embeds U+200C inside figures (`182,916\u200c`),
+which silently defeated numeric parsing and dropped every value in these
+filings.
+
 ## Known limitations
 
 - **Victory Portfolios splits its holdings across the Item 1/Item 7 boundary.**
@@ -262,12 +287,11 @@ Two distinctions the extractor preserves:
   more general heuristics. Flagged `needs_review`.
 - **Guggenheim (62.9%)** leaves large stretches unattributed within a single
   report. Not yet diagnosed. Flagged `needs_review`.
-- **Four filings lay financial data out in `<div>`, not `<table>`.** BlackRock
-  uses 92,357 `<div>` against 1,750 `<td>`; Guggenheim, Templeton and Victory
-  are the same shape. Statement extraction declines on them rather than
-  inventing rows, so they yield zero line items. Notably these four are also 4
-  of the 5 worst attribution scores, which suggests a shared root cause worth
-  investigating before building a second extraction strategy.
+- **Guggenheim and Victory yield no holdings**, but not because of their
+  layout: their schedule sections are 546 and 117 characters, so the holdings
+  are not inside the sections at all. They are blocked by the attribution gap
+  above, and BlackRock -- the same `<div>` layout with better attribution --
+  extracts 1,578 holdings fine.
 - **23 of 62 reconciled funds still disagree**, in three groups: a stated total
   that is really a minor trailing total (Guardian, ratio ~1000x), over-extraction
   (Blackstone, RiverNorth, ratio 2-3.5x), and under-extraction where few
@@ -300,8 +324,10 @@ Two distinctions the extractor preserves:
 6. ~~Holdings extraction: rows, legend resolution, reconciliation~~ ✅
 7. ~~Fair-value hierarchy table as the primary source of Level 3 amounts~~ ✅
 8. ~~Broaden reconciliation coverage~~ ✅ (33 sections -> 62 funds, 63% agreeing)
-9. A `<div>`-layout extraction strategy (4 of 15 filings).
-10. LLM stages: legend normalization, contingency triage, PCAOB judgment.
+9. ~~A `<div>`-layout extraction strategy~~ ✅ (geometry reconstruction)
+10. Diagnose Guggenheim and Victory attribution, which now blocks their
+    extraction end to end.
+11. LLM stages: legend normalization, contingency triage, PCAOB judgment.
 
 ## Storage model
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import html
 import re
+from typing import Optional
 
 # `VY(R) BrandywineGLOBAL` in the SGML header vs `VY ® BrandywineGLOBAL` in the
 # document body (Voya Variable Insurance Trust, 0001104659-26-025188).
@@ -76,3 +77,30 @@ def fund_key(name: str) -> str:
     s = _FORMERLY.sub(" ", s)
     s = _TRADEMARK.sub(" ", s)
     return " ".join(_NON_ALNUM.sub(" ", s.lower()).split())
+
+
+_NUMERIC = re.compile(r"^\(?\s*-?[\d,]*\.?\d+\s*\)?$")
+#: Currency symbols, separators, and zero-width formatting characters. The
+#: last matter: a PDF-to-HTML conversion embeds U+200C inside figures
+#: ("182,916\u200c"), which silently defeated numeric parsing and dropped the
+#: value entirely.
+_STRIP = re.compile(r"[\s$,\u200b-\u200f\ufeff\u00a0€£¥]")
+
+
+def normalize_value(cell: str) -> Optional[str]:
+    """Return a cast-friendly numeric string, or None if not a number.
+
+    Accounting parentheses become a leading minus: ``(1,234)`` -> ``-1234``.
+    """
+    text = cell.strip()
+    if not text:
+        return None
+    negative = text.startswith("(") and text.endswith(")")
+    cleaned = _STRIP.sub("", text.strip("()"))
+    if not cleaned or not _NUMERIC.match(cleaned.lstrip("-")):
+        return None
+    try:
+        float(cleaned)
+    except ValueError:
+        return None
+    return f"-{cleaned}" if negative and not cleaned.startswith("-") else cleaned

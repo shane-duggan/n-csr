@@ -24,8 +24,9 @@ import re
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
 
+from .divtables import tables_for
 from .htmltables import ParsedDocument, Table
-from .statements import normalize_value
+from .normalize import normalize_value
 
 #: Canonical flag -> phrase that identifies it in a legend entry. Matched
 #: against the filing's own wording, so a symbol is only trusted when the
@@ -272,7 +273,7 @@ def extract_holdings(
         )
 
     holdings: List[Holding] = []
-    for table in document.tables_within(start, end):
+    for table in tables_for(document, start, end):
         if not _is_holdings_table(table, document.text):
             continue
         grid = table.grid(document.text)

@@ -19,6 +19,7 @@ assembled.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import re
 from html.parser import HTMLParser
 from typing import List, Optional, Tuple
 
@@ -29,9 +30,40 @@ _OPAQUE = frozenset({"script", "style"})
 
 _CELL_TAGS = frozenset({"td", "th"})
 
+#: Geometry for filings whose financial statements are a PDF-to-HTML
+#: conversion: every word is an absolutely positioned div rather than a cell.
+_ABSOLUTE = re.compile(r"position\s*:\s*absolute", re.I)
+_TOP = re.compile(r"(?:^|;)\s*top\s*:\s*(-?[\d.]+)px", re.I)
+_LEFT = re.compile(r"(?:^|;)\s*left\s*:\s*(-?[\d.]+)px", re.I)
+_PAGE_BREAK = re.compile(r"page-break-(?:after|before)", re.I)
+
 #: Tags that implicitly close an open cell or row when the markup omits the
 #: closing tag, which filings do constantly.
 _IMPLICIT_CLOSERS = frozenset({"tr", "td", "th", "table"})
+
+
+@dataclass
+class Box:
+    """An absolutely positioned text fragment.
+
+    ``page`` scopes the coordinates: each converted page restarts at the
+    origin, so ``top`` alone would merge unrelated lines from different pages.
+    """
+
+    page: int
+    top: float
+    left: float
+    start: int
+    end: int = 0
+    children: int = 0
+
+    @property
+    def is_leaf(self) -> bool:
+        """Leaf boxes hold the text; the rest are page and column containers."""
+        return self.children == 0
+
+    def text(self, document: str) -> str:
+        return document[self.start : self.end]
 
 
 @dataclass
@@ -97,6 +129,9 @@ class _Collector(HTMLParser):
         self._opaque_depth = 0
         self._table_stack: List[Table] = []
         self.tables: List[Table] = []
+        self._box_stack: List[Box] = []
+        self._page = 0
+        self.boxes: List[Box] = []
 
     # -- text assembly ----------------------------------------------------
 
@@ -145,6 +180,29 @@ class _Collector(HTMLParser):
             self._opaque_depth += 1
         self._space()
 
+        if tag == "div":
+            style = dict(attrs).get("style") or ""
+            if _PAGE_BREAK.search(style):
+                self._page += 1
+            if _ABSOLUTE.search(style):
+                top = _TOP.search(style)
+                left = _LEFT.search(style)
+                box = Box(
+                    page=self._page,
+                    top=float(top.group(1)) if top else 0.0,
+                    left=float(left.group(1)) if left else 0.0,
+                    start=self._length,
+                )
+                parent = next(
+                    (b for b in reversed(self._box_stack) if b is not None), None
+                )
+                if parent is not None:
+                    parent.children += 1
+                self._box_stack.append(box)
+                self.boxes.append(box)
+            else:
+                self._box_stack.append(None)
+
         if tag == "table":
             table = Table(start=self._length, depth=len(self._table_stack))
             self._table_stack.append(table)
@@ -174,6 +232,10 @@ class _Collector(HTMLParser):
         if tag in _IMPLICIT_CLOSERS:
             self._close_cell()
         self._space()
+        if tag == "div" and self._box_stack:
+            box = self._box_stack.pop()
+            if box is not None:
+                box.end = self._length
         if tag == "table" and self._table_stack:
             self._table_stack.pop().end = self._length
 
@@ -210,6 +272,15 @@ def _span(value: Optional[str]) -> int:
 class ParsedDocument:
     text: str
     tables: List[Table]
+    boxes: List[Box] = field(default_factory=list)
+
+    def boxes_within(self, start: int, end: int) -> List[Box]:
+        """Leaf text fragments fully inside a character range."""
+        return [
+            b
+            for b in self.boxes
+            if b.is_leaf and b.end and b.start >= start and b.end <= end
+        ]
 
     def tables_within(self, start: int, end: int) -> List[Table]:
         """Tables fully contained in a character range."""
@@ -224,4 +295,9 @@ def parse(markup: str) -> ParsedDocument:
     for table in collector.tables:
         if not table.end:
             table.end = collector._length
-    return ParsedDocument(text=collector.text, tables=collector.tables)
+    for box in collector.boxes:
+        if not box.end:
+            box.end = collector._length
+    return ParsedDocument(
+        text=collector.text, tables=collector.tables, boxes=collector.boxes
+    )

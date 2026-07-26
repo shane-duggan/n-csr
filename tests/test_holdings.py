@@ -109,18 +109,30 @@ def test_holdings_offsets_round_trip(penn):
         assert "".join(c for c in source if c.isdigit())
 
 
-def test_div_layout_filings_yield_no_holdings():
-    for label in ("gugg", "blackrock", "victory"):
-        document, header = load(BY_LABEL[label])
-        analysis = analyze(document, header)
-        parsed = parse(document)
-        found = []
-        for section in analysis.sections:
-            if section.section_type == "schedule_of_investments" and len(section.series_ids) == 1:
-                found += extract_holdings(
-                    parsed, section.series_ids[0], section.start, section.end
-                )
-        assert found == []
+def test_holdings_are_extracted_from_div_layout():
+    """BlackRock has no <table> in its financial statements; its holdings come
+    from geometry reconstruction through the same extractor."""
+    document, header = load(BY_LABEL["blackrock"])
+    analysis = analyze(document, header)
+    parsed = parse(document)
+    found = []
+    for section in analysis.sections:
+        if section.section_type == "schedule_of_investments" and len(section.series_ids) == 1:
+            found += extract_holdings(
+                parsed, section.series_ids[0], section.start, section.end
+            )
+    assert len(found) > 1000
+    priced = [h for h in found if h.value and float(h.value) > 0]
+    assert len(priced) > 1000
+
+
+def test_zero_width_characters_do_not_defeat_value_parsing():
+    """A PDF-to-HTML conversion embeds U+200C inside figures; leaving it in
+    place silently dropped every value in those filings."""
+    from ncsr.normalize import normalize_value
+
+    assert normalize_value("182,916\u200c") == "182916"
+    assert normalize_value("$ 1,234\u200b") == "1234"
 
 
 def test_flagged_holdings_reconcile_to_the_filings_stated_144a_total(penn):
