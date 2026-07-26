@@ -27,10 +27,13 @@ _AUDIT_LANGUAGE = re.compile(r"we have audited|In our opinion", re.I)
 _DOT_LEADER = re.compile(r"\.{3,}")
 _TOC_LOOKAHEAD = 250
 
-#: Characters after the heading treated as the opinion body. Comfortably covers
-#: the addressee block and scope paragraph, where fund names are enumerated.
-#: Kept tight so coverage matching does not stray into a neighbouring report.
-OPINION_WINDOW = 6000
+#: Characters after the heading treated as the opinion body. A fixed 6,000 was
+#: too tight: KraneShares enumerates 25 funds and the list runs past it, so nine
+#: series read as uncovered when the opinion in fact names them. The window is
+#: now bounded by the *next* opinion instead, which is what the tight limit was
+#: really guarding against -- coverage must not stray into a neighbouring
+#: report. This value is only the cap when no further opinion follows.
+OPINION_WINDOW = 14000
 
 #: A wider window used only for the required-element checks. The signature block
 #: sits at the foot of the opinion and Guggenheim's is 10,000 characters past
@@ -134,19 +137,27 @@ def find_opinions(text: str) -> List[Opinion]:
     evaluated as a union across all opinions -- taking only the first reported
     5/15 for Victory.
     """
-    opinions = []
+    starts = []
     for m in _HEADING.finditer(text):
         if _DOT_LEADER.search(text[m.end() : m.end() + _TOC_LOOKAHEAD]):
             continue  # contents entry
-        body = text[m.start() : m.start() + OPINION_WINDOW]
-        if _AUDIT_LANGUAGE.search(body):
-            opinions.append(
-                Opinion(
-                    start=m.start(),
-                    text=body,
-                    element_text=text[m.start() : m.start() + ELEMENT_WINDOW],
-                )
+        if _AUDIT_LANGUAGE.search(text[m.start() : m.start() + OPINION_WINDOW]):
+            starts.append(m.start())
+
+    opinions = []
+    for index, start in enumerate(starts):
+        # Stop at the next opinion so a filing that concatenates several
+        # reports cannot have one opinion's coverage bleed into the next.
+        ceiling = starts[index + 1] if index + 1 < len(starts) else len(text)
+        body_end = min(start + OPINION_WINDOW, ceiling)
+        element_end = min(start + ELEMENT_WINDOW, ceiling)
+        opinions.append(
+            Opinion(
+                start=start,
+                text=text[start:body_end],
+                element_text=text[start:element_end],
             )
+        )
     return opinions
 
 

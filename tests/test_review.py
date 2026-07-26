@@ -226,3 +226,17 @@ def test_fund_names_containing_periods_do_not_break_tenure():
     """"...one or more Penn Series Funds, Inc. investment companies since 2004"."""
     document, header = load(BY_LABEL["penn"])
     assert find_opinions(textify(document))[0].auditor_since == "2004"
+
+
+def test_opinion_window_is_bounded_by_the_next_opinion():
+    """A fixed 6,000-character window was too tight for a filing that
+    enumerates 25 funds -- nine read as uncovered when the opinion named them.
+    Bounding by the next opinion instead keeps coverage from bleeding across
+    concatenated reports, which is what the tight limit was guarding against."""
+    document, header = load(BY_LABEL["guard"])
+    analysis = analyze(document, header)
+    opinions = find_opinions(textify(document))
+    assert len(opinions) == 24
+    for earlier, later in zip(opinions, opinions[1:]):
+        assert earlier.start + len(earlier.text) <= later.start
+    assert analysis.reconciliation.uncovered == {}
