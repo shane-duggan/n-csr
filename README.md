@@ -19,7 +19,7 @@ Scope is currently annual open-end N-CSR. N-CSRS is classified and carries
 scope by decision.
 
 ```
-python3 -m pytest -q                          # 178 tests
+python3 -m pytest -q                          # 182 tests
 python3 -m ncsr.cli DOC.htm HEADER.hdr        # manifest as JSON
 python3 -m ncsr.cli DOC.htm HEADER.hdr --emit ./out
 python3 -m ncsr.cli --ddl s3://bucket/ncsr    # Iceberg DDL
@@ -68,9 +68,11 @@ backfill without a delete step.
 - **3,559 statement line items** extracted across 9 filings. Penn Series'
   Money Market Fund dividend income comes out at **822,559**, matching the
   filing, with Interest and Total Investment Income also exact.
-- **47,246 holdings** extracted. Penn's High Yield Bond Fund reconciles to its
-  own stated total (121,162,999) and, independently, its Rule 144A holdings sum
-  to the stated 99,518,726 -- 81.0% of net assets, matching the filing exactly.
+- **42,079 holdings** extracted, and **62 funds** reconciled against the total
+  their own schedule states -- 17 exactly, 39 within 1% (63%). Penn's High Yield
+  Bond Fund reconciles to its stated 121,162,999 and, independently, its Rule
+  144A holdings sum to the stated 99,518,726 -- 81.0% of net assets, matching
+  exactly.
 - **1,332 fair-value rows** across 36 funds, every table self-consistent: on
   each row the levels sum to the stated total.
 - 201 MB analyzed in 1.31 s (153 MB/s), peak RSS 292 MB; the table parse adds
@@ -205,9 +207,28 @@ fair-value hierarchy summary sits inside the same section and its rows are
 asset-class totals (`Corporate Bonds 114,962,448`); reading them as holdings
 roughly doubled the fund's total before they were excluded.
 
-Reading the stated total requires care of its own: `TOTAL INVESTMENTS — 98.6%
+Reading the stated total requires care of its own. `TOTAL INVESTMENTS — 98.6%
 (Cost $117,939,535) $ 121,162,999` gives cost *and* market value, and for an
-equity fund with appreciation they differ by more than twofold.
+equity fund with appreciation they differ by more than twofold. A schedule also
+states subtotals on the way down, so the last grand total wins.
+
+Reconciliation is per **fund**, not per section: attribution splits a schedule
+across page-level sections and the grand total lands in whichever one ends it.
+
+Three things had to be right before the check was worth trusting, each found by
+a fund that failed it:
+
+- **Allocation summaries are not holdings.** A schedule closes with breakdowns
+  by industry or country (`Banks 18,226,320`) whose rows are shaped exactly like
+  securities. Counting them inflated a fund by roughly its own size.
+- **A single-position table still has a quantity column.** Requiring a column to
+  carry more than one number discarded the quantity column of a one-line
+  short-term investments table, and with it the position.
+- **Units are declared in table furniture that flattening destroys.** Some
+  filings state the summary in thousands while listing holdings in dollars, so
+  a correct extraction read as a 100,000% discrepancy. A scale is applied only
+  when it brings the check into agreement, never to make a failure look
+  smaller.
 
 ## Level 3 exposure
 
@@ -247,9 +268,11 @@ Two distinctions the extractor preserves:
   inventing rows, so they yield zero line items. Notably these four are also 4
   of the 5 worst attribution scores, which suggests a shared root cause worth
   investigating before building a second extraction strategy.
-- **Reconciliation coverage is thin.** Only 33 of 564 schedule sections state a
-  total in a form the check recognises. Penn reconciles well (8 exact, 10 within
-  1%, 5 off); other filings word their totals differently and go unchecked.
+- **23 of 62 reconciled funds still disagree**, in three groups: a stated total
+  that is really a minor trailing total (Guardian, ratio ~1000x), over-extraction
+  (Blackstone, RiverNorth, ratio 2-3.5x), and under-extraction where few
+  holdings are found at all (Kennedy/IMST, Main ETFs). Each is reported as a
+  `holdings_reconciliation` exception rather than hidden.
 - **Guardian yields only 29 line items across 23 funds.** Its per-fund sections
   are found and mapped, but few captions come through. Under-diagnosed.
 - **Comparative prior-period columns are not captured** for single-fund
@@ -276,7 +299,7 @@ Two distinctions the extractor preserves:
 5. ~~Offset-preserving HTML parsing; populate `statement_lines`~~ ✅
 6. ~~Holdings extraction: rows, legend resolution, reconciliation~~ ✅
 7. ~~Fair-value hierarchy table as the primary source of Level 3 amounts~~ ✅
-8. Broaden reconciliation coverage beyond the 33/564 sections now checked.
+8. ~~Broaden reconciliation coverage~~ ✅ (33 sections -> 62 funds, 63% agreeing)
 9. A `<div>`-layout extraction strategy (4 of 15 filings).
 10. LLM stages: legend normalization, contingency triage, PCAOB judgment.
 

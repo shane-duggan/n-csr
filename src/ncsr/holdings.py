@@ -70,37 +70,73 @@ _NOT_HOLDINGS = re.compile(
 #: The cost parenthetical must be removed first: "TOTAL INVESTMENTS - 98.6%
 #: (Cost $117,939,535) $ 121,162,999" states cost *and* market value, and for an
 #: equity fund with appreciation they differ by more than twofold.
-_STATED_TOTAL = re.compile(r"TOTAL INVESTMENTS\b.{0,120}", re.I | re.S)
+_STATED_TOTAL = re.compile(
+    r"TOTAL\s+(?:INVESTMENTS?|INVESTMENTS?\s+IN\s+SECURITIES)\b.{0,140}",
+    re.I | re.S,
+)
 _COST_PARENTHETICAL = re.compile(r"\(\s*Cost[^)]*\)", re.I)
 _MONEY = re.compile(r"\$\s*([\d,]{7,})")
 
 
 def stated_total(text: str) -> Optional[float]:
-    """The market value a schedule reports for itself, if it states one."""
-    match = _STATED_TOTAL.search(text)
-    if not match:
-        return None
-    segment = _COST_PARENTHETICAL.sub("", match.group(0))
-    money = _MONEY.search(segment)
-    if not money:
-        return None
-    try:
-        return float(money.group(1).replace(",", ""))
-    except ValueError:
-        return None
+    """The market value a schedule reports for itself, if it states one.
+
+    Attribution splits a schedule across many page-level sections, so this is
+    applied to the union of a fund's sections rather than to one of them: the
+    grand total sits at the end of the whole schedule and routinely lands in a
+    different section from the holdings it totals.
+
+    The last match wins. A schedule states subtotals on the way down ("TOTAL
+    COMMON STOCKS") before the grand total, and only the last is fund-wide.
+    """
+    matches = list(_STATED_TOTAL.finditer(text))
+    for match in reversed(matches):
+        segment = _COST_PARENTHETICAL.sub("", match.group(0))
+        money = _MONEY.search(segment)
+        if not money:
+            continue
+        try:
+            return float(money.group(1).replace(",", ""))
+        except ValueError:
+            continue
+    return None
+
+
+#: Scales a schedule may state its totals in. Some filings present the summary
+#: in thousands or millions while listing holdings in whole dollars, and the
+#: units are declared in table furniture that does not survive flattening.
+_SCALES = (1.0, 1_000.0, 1_000_000.0)
+
+#: A scale is only applied when it brings the check within this fraction.
+RESOLVE_TOLERANCE = 0.01
 
 
 def reconcile(holdings: Sequence[Holding], text: str):
     """Compare extracted holdings against the schedule's own stated total.
 
-    Returns ``(extracted, stated, relative_difference)``; ``stated`` is None
-    when the schedule reports no total to check against.
+    Returns ``(extracted, stated, relative_difference)``, where ``stated`` is
+    expressed in whole dollars; ``stated`` is None when the schedule reports no
+    total to check against.
+
+    The stated figure is tried at each plausible scale and the closest wins. A
+    coincidental thousand-fold agreement is not credible, so this resolves the
+    units rather than guessing them -- without it a correctly extracted fund
+    reads as a 100,000% discrepancy.
     """
     extracted = sum(float(h.value) for h in holdings if h.value)
     stated = stated_total(text)
     if not stated:
         return extracted, None, None
-    return extracted, stated, abs(extracted - stated) / stated
+    literal = abs(extracted - stated) / stated
+    for scale in _SCALES[1:]:
+        scaled = stated * scale
+        difference = abs(extracted - scaled) / scaled
+        if difference <= RESOLVE_TOLERANCE:
+            return extracted, scaled, difference
+    # No scale resolves the check, so report the figure as filed rather than
+    # rescaling to whichever is marginally less wrong -- a misleading "stated"
+    # value is worse than an honest discrepancy.
+    return extracted, stated, literal
 
 
 def _is_holdings_table(table: Table, document: str) -> bool:
@@ -211,9 +247,10 @@ def _value_columns(grid: Sequence[Sequence[str]]) -> Tuple[int, int]:
                 numeric_counts[index] = numeric_counts.get(index, 0) + 1
     if not numeric_counts:
         return -1, -1
-    populated = sorted(i for i, n in numeric_counts.items() if n > 1)
-    if not populated:
-        populated = sorted(numeric_counts)
+    # Every column carrying a number counts, however few. A short-term
+    # investments table may hold a single position, and requiring more than one
+    # numeric entry discarded its quantity column and with it the position.
+    populated = sorted(numeric_counts)
     value_column = populated[-1]
     quantity_column = populated[-2] if len(populated) > 1 else -1
     return quantity_column, value_column
@@ -241,6 +278,13 @@ def extract_holdings(
         grid = table.grid(document.text)
         quantity_column, value_column = _value_columns(grid)
         if value_column < 0:
+            continue
+        # A schedule lists a quantity beside every value. A table with a single
+        # numeric column is an allocation summary -- schedules close with
+        # breakdowns by industry or country ("Banks 18,226,320") whose rows are
+        # otherwise shaped exactly like holdings and would inflate the fund by
+        # roughly its own size.
+        if quantity_column < 0:
             continue
 
         category: Optional[str] = None

@@ -310,18 +310,30 @@ def emit(
                     )
             result.statement_lines = store.append_rows("statement_lines", line_rows)
 
-            holding_rows = []
+            # A fund's schedule is the union of its sections: attribution
+            # splits it per page, and the grand total lands in whichever
+            # section happens to end the schedule.
+            by_fund: Dict[str, list] = {}
+            fund_text: Dict[str, list] = {}
             for section in analysis.sections:
                 if section.section_type != "schedule_of_investments":
                     continue
                 if len(section.series_ids) != 1:
                     continue  # a shared schedule cannot be split by fund
                 series_id = section.series_ids[0]
-                found = extract_holdings(parsed, series_id, section.start, section.end)
+                by_fund.setdefault(series_id, []).extend(
+                    extract_holdings(parsed, series_id, section.start, section.end)
+                )
+                fund_text.setdefault(series_id, []).append(
+                    text[section.start : section.end]
+                )
+
+            holding_rows = []
+            for series_id, found in by_fund.items():
                 if not found:
                     continue
                 extracted, stated, difference = reconcile(
-                    found, text[section.start : section.end]
+                    found, " ".join(fund_text[series_id])
                 )
                 if stated is not None:
                     result.reconciliations.append(

@@ -135,3 +135,58 @@ def test_flagged_holdings_reconcile_to_the_filings_stated_144a_total(penn):
     )
     assert total == 99518726.0
     assert round(100 * total / 122897622.0, 1) == 81.0
+
+
+def test_allocation_summary_tables_are_not_read_as_holdings(penn):
+    """A schedule closes with breakdowns by industry or country ("Banks
+    18,226,320") whose rows look exactly like holdings but carry no quantity.
+    Counting them inflated a fund by roughly its own size."""
+    analysis, parsed = penn
+    series_id, section = _schedule(analysis, "International Equity Fund")
+    holdings = extract_holdings(parsed, series_id, section.start, section.end)
+    issuers = {h.issuer for h in holdings}
+    assert not {"Banks", "Aerospace & Defense", "Semiconductors"} & issuers
+    extracted, stated, difference = reconcile(
+        holdings, parsed.text[section.start : section.end]
+    )
+    assert difference == 0.0
+
+
+def test_a_single_position_table_keeps_its_quantity_column(penn):
+    """Short-term investments may hold one position. Requiring a column to
+    carry several numbers discarded its quantity column, and with it the
+    position -- which showed as a 2.3% shortfall against the stated total."""
+    analysis, parsed = penn
+    series_id, section = _schedule(analysis, "High Yield Bond Fund")
+    holdings = extract_holdings(parsed, series_id, section.start, section.end)
+    money_market = [h for h in holdings if "FedFund" in h.issuer]
+    assert money_market
+    assert money_market[0].shares_or_par
+
+
+def test_stated_total_takes_the_last_grand_total():
+    """A schedule states subtotals on the way down before its grand total."""
+    text = (
+        "TOTAL COMMON STOCKS (Cost $63,342,086) $ 70,111,222 "
+        "TOTAL SHORT-TERM INVESTMENTS (Cost $1,224,536) $ 1,224,536 "
+        "TOTAL INVESTMENTS — 99.1% (Cost $64,566,622) $ 71,335,758"
+    )
+    assert stated_total(text) == 71335758.0
+
+
+def test_units_are_resolved_only_when_they_resolve():
+    """Some filings state the summary in thousands while listing holdings in
+    dollars. Rescaling is applied when it brings the check into agreement, and
+    withheld otherwise -- a misleading "stated" figure is worse than an honest
+    discrepancy."""
+    from ncsr.holdings import Holding
+
+    holdings = [Holding(series_id="S1", issuer="X", value="2164360342")]
+
+    resolved = reconcile(holdings, "TOTAL INVESTMENTS $ 2,168,345")
+    assert resolved[1] == 2168345000.0      # read as thousands
+    assert resolved[2] < 0.01
+
+    unresolved = reconcile(holdings, "TOTAL INVESTMENTS $ 161,824")
+    assert unresolved[1] == 161824.0        # reported as filed
+    assert unresolved[2] > 1
