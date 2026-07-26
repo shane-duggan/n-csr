@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import List
+from typing import List, Sequence
 
 #: An Item 7 span shorter than this is a cross-reference or stub, not a section.
 MIN_SECTION_CHARS = 5000
@@ -78,6 +78,47 @@ def _heading_offsets(pattern: re.Pattern, text: str) -> List[int]:
         for m in pattern.finditer(text)
         if not _DOT_LEADER.search(text[m.end() : m.end() + _TOC_LOOKAHEAD])
     ]
+
+
+#: Front matter that opens a report. Many filings also print this as a per-page
+#: header link, so it is only treated as a boundary inside a span already known
+#: to hold several reports.
+_REPORT_FRONT_MATTER = re.compile(r"Table\s+of\s+Contents", re.I)
+
+
+def split_reports(text: str, span: Span, opinion_offsets: Sequence[int]) -> List[Span]:
+    """Split a span that concatenates several complete reports.
+
+    Victory Portfolios packs four annual reports into one Item 7 span, each with
+    its own contents page, audit opinion, and back matter. Because a section
+    runs from its heading to the next one, the opinion at the end of one report
+    absorbs 20-34k characters of the next report's front matter, which wrecks
+    attribution for everything downstream.
+
+    The split is gated on the span containing more than one substantive audit
+    opinion, which is what actually distinguishes a multi-report span. Without
+    that gate this would shatter ordinary filings: Penn Series prints "Table of
+    Contents" as a page header on every page, and splitting there would break
+    the continuation carry-forward that holds a paginated schedule together.
+    """
+    inside = [o for o in opinion_offsets if span.start <= o < span.end]
+    if len(inside) < 2:
+        return [span]
+
+    boundaries = [
+        m.start()
+        for m in _REPORT_FRONT_MATTER.finditer(text, span.start, span.end)
+        # Front matter only marks a new report if a report already ended.
+        if any(o < m.start() for o in inside)
+    ]
+    if not boundaries:
+        return [span]
+
+    cuts = [span.start] + sorted(set(boundaries)) + [span.end]
+    parts = [
+        Span(a, b) for a, b in zip(cuts, cuts[1:]) if b - a >= MIN_SECTION_CHARS
+    ]
+    return parts or [span]
 
 
 def find_item7_spans(text: str) -> List[Span]:

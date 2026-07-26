@@ -16,7 +16,7 @@ from .audit import Reconciliation, find_opinions, reconcile_coverage
 from .header import Header, parse_header
 from .master_feeder import MasterFeeder, detect as detect_master_feeder
 from .normalize import textify
-from .sectioner import Span, find_item7_spans
+from .sectioner import Span, find_item7_spans, split_reports
 
 #: Bump to invalidate every stored manifest and force a backfill.
 PIPELINE_VERSION = 1
@@ -160,9 +160,15 @@ def analyze(markup: str, header_markup: str) -> FilingAnalysis:
 
     # Semi-annual reports are unaudited and carry no opinion, so coverage is
     # not applicable -- running it would report a spurious 0/N gap.
+    opinions = find_opinions(text)
     reconciliation = None
     if kind is FilingKind.OPEN_END_ANNUAL:
-        reconciliation = reconcile_coverage(header.series, find_opinions(text))
+        reconciliation = reconcile_coverage(header.series, opinions)
+
+    # A span holding several complete reports is split before attribution so an
+    # opinion cannot absorb the next report's front matter.
+    opinion_offsets = [o.start for o in opinions]
+    spans = [part for span in spans for part in split_reports(text, span, opinion_offsets)]
 
     structure = detect_master_feeder(text, header.series)
 

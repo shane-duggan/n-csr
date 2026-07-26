@@ -50,8 +50,8 @@ backfill without a delete step.
 - **101/101** series reconciled to an audit opinion across 13 open-end N-CSRs.
 - **100/101** series located with a holdings schedule. The one absence is
   genuine: BlackRock Cash Funds: Treasury is a feeder holding master shares.
-- **91%** of fund-specific content attributed to a named fund corpus-wide;
-  8 of 12 filings clear the 85% review threshold, the rest are flagged.
+- **93.4%** of fund-specific content attributed to a named fund corpus-wide;
+  9 of 12 filings clear the 85% review threshold, the rest are flagged.
 - Section counts exact on every filing, including Guardian VP Trust's 24
   concatenated per-fund reports.
 - 201 MB analyzed in 1.31 s (153 MB/s), peak RSS 292 MB.
@@ -60,11 +60,11 @@ Attribution quality per filing, with anything below 85% routed to review:
 
 | | coverage | | coverage |
 |---|---:|---|---:|
-| voya, consolidated | 100% | templeton | 89% |
-| guard | 98.6% | master | 87.8% |
-| penn | 98.5% | feeder | 84.1% ⚠ |
-| nlfund | 94.2% | blackrock | 82.9% ⚠ |
-| imst | 94.1% | gugg | 62.9% ⚠ |
+| voya, consolidated | 100% | imst | 94.1% |
+| guard | 98.6% | templeton | 89.3% |
+| penn | 98.5% | feeder | 88.6% |
+| master | 95.5% | blackrock | 82.9% ⚠ |
+| nlfund | 94.2% | gugg | 62.9% ⚠ |
 | | | victory | 35.5% ⚠ |
 
 Performance means the sectioning stage is nowhere near the Lambda 15-minute
@@ -144,15 +144,15 @@ six-month window — about 2–3% of filings.
 
 ## Known limitations
 
-- **Multi-report Item 7 spans attribute poorly.** Victory Portfolios (35.5%)
-  concatenates four complete annual reports inside a *single* Item 7 span, each
-  with its own contents page, audit opinion, and back matter. Because a section
-  runs from its heading to the next one, its opinion sections run 20-34k chars
-  straight through a report boundary into the next report's front matter. The
-  fix is to split such spans at report boundaries before attributing, rather
-  than to loosen heading detection. Guggenheim (62.9%) is a milder case of the
-  same shape. Both are flagged `needs_review`, so nothing silently flows
-  downstream.
+- **Victory Portfolios splits its holdings across the Item 1/Item 7 boundary.**
+  86 of its 145 "Schedule of Portfolio Investments" occurrences sit *outside*
+  the Item 7 spans, starting at offset 253,788 while Item 7 opens at 552,393 --
+  so its Item 7 is 78% notes and only 4% holdings. Report splitting (below) did
+  not move its coverage, because the content is not in the span at all. This is
+  a span-boundary question specific to that filer and needs a targeted look, not
+  more general heuristics. Flagged `needs_review`.
+- **Guggenheim (62.9%)** leaves large stretches unattributed within a single
+  report. Not yet diagnosed. Flagged `needs_review`.
 - **Master-feeder look-through is detected but not yet enforced.** The
   relationship is extracted (see below) and masters are marked
   `aggregate_excluded_series`, but nothing consumes that flag until the fact
@@ -169,8 +169,8 @@ six-month window — about 2–3% of filings.
 1. ~~Sectioning, classification, audit reconciliation~~ ✅
 2. ~~Per-fund attribution within Item 7, with low-confidence filings routed to
    review~~ ✅
-3. Split multi-report Item 7 spans at report boundaries (unblocks Victory and
-   Guggenheim; see *Known limitations*).
+3. ~~Split multi-report Item 7 spans at report boundaries~~ ✅ (corpus
+   attribution 91% -> 93.4%; master and feeder cleared the review threshold)
 4. Iceberg table definitions (`holdings`, `statement_lines`, `findings`) and the
    manifest-commit write path.
 5. Table-level extraction with offset-preserving HTML parsing.

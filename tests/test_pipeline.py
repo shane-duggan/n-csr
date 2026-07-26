@@ -25,6 +25,12 @@ def analyses():
     return {f.label: analyze(*load(f)) for f in FIXTURES}
 
 
+@pytest.fixture(scope="session")
+def texts():
+    """Normalized document text per fixture."""
+    return {f.label: textify(load(f)[0]) for f in FIXTURES}
+
+
 # --------------------------------------------------------------------------
 # unit
 # --------------------------------------------------------------------------
@@ -78,8 +84,14 @@ def test_closed_end_is_skipped_with_a_reason():
 @pytest.mark.parametrize(
     "fixture", [f for f in FIXTURES if f.sections is not None], ids=lambda f: f.label
 )
-def test_item7_section_count(fixture, analyses):
-    assert len(analyses[fixture.label].spans) == fixture.sections
+def test_item7_heading_count(fixture, texts):
+    """Item 7 headings located by the sectioner, before multi-report splitting.
+
+    These counts were verified by hand against the live filings, so they are
+    asserted against the sectioner directly rather than against the pipeline's
+    post-split spans.
+    """
+    assert len(find_item7_spans(texts[fixture.label])) == fixture.sections
 
 
 def test_spans_are_ordered_and_disjoint(analyses):
@@ -141,14 +153,14 @@ def test_full_corpus_reconciles(analyses):
 #: so its opinion sections run through report boundaries; Guggenheim and the
 #: master/feeder pair leave large stretches unattributed. Tracked as a known
 #: gap, not silently accepted -- see README "Known limitations".
-KNOWN_LOW_ATTRIBUTION = {"gugg", "victory", "blackrock", "feeder"}
+KNOWN_LOW_ATTRIBUTION = {"gugg", "victory", "blackrock"}
 
 #: Per-filing attribution floors. Pinned so a regression shows up as a specific
 #: filing getting worse rather than a corpus average drifting quietly.
 COVERAGE_FLOOR = {
     "penn": 0.98, "guard": 0.98, "gugg": 0.62, "imst": 0.94,
     "templeton": 0.89, "blackrock": 0.82, "victory": 0.35, "nlfund": 0.94,
-    "voya": 1.0, "consolidated": 1.0, "master": 0.87, "feeder": 0.84,
+    "voya": 1.0, "consolidated": 1.0, "master": 0.95, "feeder": 0.88,
 }
 
 
@@ -158,11 +170,9 @@ def test_every_series_has_a_holdings_schedule(fixture, analyses):
     feeder holding only master shares. Only `feeder` is a known genuine case."""
     result = analyses[fixture.label]
     missing = set(result.header.series) - result.series_with_schedule
-    if fixture.label == "feeder":
-        # BlackRock Cash Funds: Treasury invests through a master portfolio.
-        assert len(missing) <= 1
-    else:
-        assert not missing, f"no schedule for {sorted(missing)}"
+    # A feeder holding only master shares has no schedule of its own.
+    missing -= set(result.master_feeder.feeders)
+    assert not missing, f"no schedule for {sorted(missing)}"
 
 
 @pytest.mark.parametrize("fixture", ANNUAL, ids=lambda f: f.label)
@@ -249,3 +259,18 @@ def test_feeder_without_own_schedule_is_not_flagged(analyses):
     missing = set(result.header.series) - result.series_with_schedule
     assert missing
     assert missing <= set(result.master_feeder.feeders)
+
+
+def test_multi_report_spans_are_split(analyses):
+    """Only spans holding several complete reports are split; ordinary filings
+    keep a single span even though they print "Table of Contents" per page."""
+    assert len(analyses["victory"].spans) == 4   # four concatenated reports
+    assert len(analyses["master"].spans) == 6
+    assert len(analyses["penn"].spans) == 1      # per-page header, not a boundary
+    assert len(analyses["gugg"].spans) == 1      # single opinion, no split
+
+
+def test_corpus_attribution_improved_by_report_splitting(analyses):
+    specific = sum(analyses[f.label].fund_specific_chars for f in ANNUAL)
+    attributed = sum(analyses[f.label].attributed_chars for f in ANNUAL)
+    assert attributed / specific >= 0.93
