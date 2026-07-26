@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+tests/_cache/
+.venv/
+*.egg-info/
+
+# Claude Code local machine state (not shared)
+.claude/settings.local.json
