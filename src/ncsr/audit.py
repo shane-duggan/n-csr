@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Dict, List, Sequence
+from typing import Dict, List, Optional, Sequence
 
 from .normalize import fund_key
 
@@ -29,13 +29,83 @@ _TOC_LOOKAHEAD = 250
 
 #: Characters after the heading treated as the opinion body. Comfortably covers
 #: the addressee block and scope paragraph, where fund names are enumerated.
+#: Kept tight so coverage matching does not stray into a neighbouring report.
 OPINION_WINDOW = 6000
+
+#: A wider window used only for the required-element checks. The signature block
+#: sits at the foot of the opinion and Guggenheim's is 10,000 characters past
+#: the heading -- far outside the coverage window, but unambiguous once found.
+ELEMENT_WINDOW = 14000
+
+
+#: Elements an opinion must carry, each checkable without a model.
+#: The electronic signature line. Firms sign as "/s/ KPMG LLP" and what follows
+#: varies (a tenure sentence, a city, nothing), so the match is anchored on the
+#: firm-type suffix rather than on whatever comes next.
+_SIGNATURE = re.compile(
+    r"/s/\s*([A-Z][A-Za-z.,&'\- ]{2,55}?(?:LLP|LLC|L\.L\.P\.|P\.?C\.?|LTD\.?))\b"
+)
+#: "We have served as the auditor of one or more Penn Series Funds, Inc.
+#: investment companies since 2004." -- the fund name routinely contains a
+#: period, so the gap cannot exclude them.
+_TENURE = re.compile(r"We have served as.{0,200}?since\s+(\d{4})", re.I | re.S)
+_CITY_DATE = re.compile(
+    r"([A-Z][A-Za-z.\- ]+,\s*[A-Z][A-Za-z.\- ]+)\s+"
+    r"((?:January|February|March|April|May|June|July|August|September|October|"
+    r"November|December)\s+\d{1,2},\s*\d{4})"
+)
+_PCAOB = re.compile(r"standards of the PCAOB|Public Company Accounting Oversight Board", re.I)
 
 
 @dataclass(frozen=True)
 class Opinion:
     start: int
     text: str
+    #: Wider slice used only for required-element checks; see ELEMENT_WINDOW.
+    element_text: str = ""
+
+    @property
+    def _elements(self) -> str:
+        return self.element_text or self.text
+
+    @property
+    def auditor(self) -> Optional[str]:
+        match = _SIGNATURE.search(self._elements)
+        return match.group(1).strip() if match else None
+
+    @property
+    def auditor_since(self) -> Optional[str]:
+        match = _TENURE.search(self._elements)
+        return match.group(1) if match else None
+
+    @property
+    def report_date(self) -> Optional[str]:
+        match = _CITY_DATE.search(self._elements)
+        return match.group(2) if match else None
+
+    @property
+    def city(self) -> Optional[str]:
+        match = _CITY_DATE.search(self._elements)
+        return match.group(1) if match else None
+
+    @property
+    def cites_pcaob(self) -> bool:
+        return bool(_PCAOB.search(self._elements))
+
+    def missing_elements(self) -> List[str]:
+        """Required elements absent from the opinion, by name."""
+        missing = []
+        if not self.auditor:
+            missing.append("auditor signature")
+        if not self.report_date:
+            missing.append("report date")
+        if not self.city:
+            missing.append("city of issuance")
+        if not self.auditor_since:
+            missing.append("auditor tenure statement")
+        if not self.cites_pcaob:
+            missing.append("reference to PCAOB standards")
+        return missing
 
 
 @dataclass
@@ -70,7 +140,13 @@ def find_opinions(text: str) -> List[Opinion]:
             continue  # contents entry
         body = text[m.start() : m.start() + OPINION_WINDOW]
         if _AUDIT_LANGUAGE.search(body):
-            opinions.append(Opinion(start=m.start(), text=body))
+            opinions.append(
+                Opinion(
+                    start=m.start(),
+                    text=body,
+                    element_text=text[m.start() : m.start() + ELEMENT_WINDOW],
+                )
+            )
     return opinions
 
 

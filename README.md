@@ -19,7 +19,7 @@ Scope is currently annual open-end N-CSR. N-CSRS is classified and carries
 scope by decision.
 
 ```
-python3 -m pytest -q                          # 185 tests
+python3 -m pytest -q                          # 204 tests
 python3 -m ncsr.cli DOC.htm HEADER.hdr        # manifest as JSON
 python3 -m ncsr.cli DOC.htm HEADER.hdr --emit ./out
 python3 -m ncsr.cli --ddl s3://bucket/ncsr    # Iceberg DDL
@@ -48,6 +48,9 @@ string, as the SEC requires one.
 | `holdings` | Schedule-of-investments rows, legend resolution, reconciliation |
 | `fairvalue` | Fair-value hierarchy table; Level 1/2/3 per asset class |
 | `divtables` | Reconstructs tables from absolutely positioned text |
+| `candidates` | Deterministic retrieval of passages for model review |
+| `llm` | The model seam: `Judge` protocol, Anthropic and scripted impls |
+| `review` | Model-backed stages: contingency triage |
 | `emit` | Persist evidence, rows, and the commit marker |
 
 `analyze()` returns a `FilingAnalysis` whose `manifest()` is the payload written
@@ -284,8 +287,59 @@ next record, and the conversion embeds U+200C inside figures (`182,916\u200c`),
 which silently defeated numeric parsing and dropped every value in these
 filings.
 
+## Model-backed review
+
+Only two of the questions this pipeline answers cannot be settled by parsing,
+and both are judgement calls a reviewer may be held to.
+
+**Contingency exposure.** Nearly every filing carries indemnification language
+and nearly all of it is boilerplate, so a keyword search answers "almost every
+fund", which is useless. The real question is boilerplate versus a quantified
+exposure, and only a model can tell them apart.
+
+**Audit-opinion quality.** Series coverage and the required elements are checked
+deterministically (below); what remains is whether the opinion says what an
+opinion must say.
+
+Retrieval is what makes this cheap. The notes are the largest part of a filing,
+so passages are selected before anything reaches a model: **52 passages, roughly
+7,600 tokens for all thirteen filings** — about 600 tokens each. Trigger choice
+does most of that work, because a naive keyword set is nearly all noise:
+
+- `settlement` is overwhelmingly *trade* settlement ("valued at the last
+  settlement price") — Guardian produced 213 hits on the naive set;
+- `claims` appears as an asset class ("loans, trade claims, sovereign debt");
+- `litigation and extraordinary expenses` is a fee-cap definition, and made up
+  16 of Guardian's 19 remaining passages.
+
+After filtering, Guardian yields 3. A passage also carries three sentences past
+its trigger, because an indemnification note only reads as boilerplate once you
+reach "the risk of loss to be remote" — cutting at the first full stop hides the
+sentence that decides it.
+
+The model sits behind a `Judge` protocol, so retrieval, prompting, verdict
+parsing and finding construction are all tested offline with a scripted judge;
+no credentials are needed to run the suite. Verdicts land in the same `findings`
+table as rule-derived ones, carrying `method='llm'`, a `model_id` and a
+confidence, so a reviewer can filter by how a conclusion was reached. Boilerplate
+is recorded as `info` rather than dropped — a reviewer needs to see the language
+was found and judged, not missed — and a passage the model returns no verdict for
+is surfaced rather than assumed benign.
+
+### Opinion elements, checked without a model
+
+Auditor signature, tenure statement, city, report date, and the PCAOB reference
+are all extracted deterministically; **7 of 12 opinions carry every element**.
+The other five have no machine-readable auditor signature — they sign by image.
+One near-miss is worth noting: Guggenheim's only `/s/` is the CEO certifying the
+report, not the auditor signing the opinion, so the match requires a firm
+suffix.
+
 ## Known limitations
 
+- **The contingency stage has not been run against a live model.** The seam and
+  both implementations exist and are tested with a scripted judge; running it
+  needs credentials, which this environment does not have.
 - **The semi-annual filing sits at 70.4% attribution** and is flagged
   `needs_review`. It is the only filing in the corpus below the threshold.
 - **Guggenheim yields no holdings** despite 90.7% attribution. Victory, the same
@@ -326,7 +380,10 @@ filings.
 9. ~~A `<div>`-layout extraction strategy~~ ✅ (geometry reconstruction)
 10. ~~Diagnose Guggenheim and Victory attribution~~ ✅ (page-footer fix; corpus
     attribution 93.4% -> 95.9%)
-11. LLM stages: legend normalization, contingency triage, PCAOB judgment.
+11. ~~Contingency triage behind a testable model seam~~ ✅
+12. Opinion-quality judgement (required statements, PCAOB standards) using the
+    same seam; the deterministic element checks are already in place.
+13. Financial-highlights footnote salience.
 
 ## Storage model
 
