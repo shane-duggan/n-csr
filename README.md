@@ -9,17 +9,20 @@ and per-fact lineage so a reviewer can always see where a number came from.
 
 ## Status
 
-Milestones 1 and 2 are built and validated: **sectioning, classification,
-audit-coverage reconciliation, and per-fund attribution**. Fact extraction,
-storage, and the LLM review stages are not yet implemented -- see *Roadmap*.
+Built and validated: **sectioning, classification, audit-coverage
+reconciliation, per-fund attribution, and the storage write path**. Table-level
+fact extraction and the LLM review stages are not yet implemented -- the
+`holdings` and `statement_lines` schemas are defined but carry no rows yet.
 
 Scope is currently annual open-end N-CSR. N-CSRS is classified and carries
 `audited=false` but is not a focus; N-CSR/A and closed-end funds are out of
 scope by decision.
 
 ```
-python3 -m pytest -q          # 107 tests
-python3 -m ncsr.cli DOC.htm HEADER.hdr
+python3 -m pytest -q                          # 126 tests
+python3 -m ncsr.cli DOC.htm HEADER.hdr        # manifest as JSON
+python3 -m ncsr.cli DOC.htm HEADER.hdr --emit ./out
+python3 -m ncsr.cli --ddl s3://bucket/ncsr    # Iceberg DDL
 ```
 
 The test suite runs against 15 real filings. The first run downloads ~250 MB
@@ -36,7 +39,11 @@ string, as the SEC requires one.
 | `audit` | Extract audit opinions; reconcile against the series roster |
 | `attribution` | Split Item 7 into per-fund sections |
 | `master_feeder` | Detect feeder→master relationships; look-through policy |
-| `pipeline` | Classify the filing; emit the manifest |
+| `pipeline` | Classify the filing; produce the manifest |
+| `records` | Row shapes and lineage for the analytical tables |
+| `ddl` | Athena/Iceberg table definitions |
+| `store` | Storage boundary; `LocalStore` reference implementation |
+| `emit` | Persist evidence, rows, and the commit marker |
 
 `analyze()` returns a `FilingAnalysis` whose `manifest()` is the payload written
 to DynamoDB **last**, as the commit marker that makes reprocessing idempotent.
@@ -171,24 +178,50 @@ six-month window — about 2–3% of filings.
    review~~ ✅
 3. ~~Split multi-report Item 7 spans at report boundaries~~ ✅ (corpus
    attribution 91% -> 93.4%; master and feeder cleared the review threshold)
-4. Iceberg table definitions (`holdings`, `statement_lines`, `findings`) and the
-   manifest-commit write path.
-5. Table-level extraction with offset-preserving HTML parsing.
+4. ~~Iceberg table definitions and the manifest-commit write path~~ ✅
+5. Table-level extraction with offset-preserving HTML parsing, populating
+   `holdings` and `statement_lines`.
 6. LLM stages: legend normalization, contingency triage, PCAOB judgment.
+7. Diagnose Victory and Guggenheim attribution (see *Known limitations*).
 
-## Storage model (target)
+## Storage model
 
-Archival tree, one directory per fund-section, immutable, never queried
-directly:
+Three destinations, deliberately separate.
+
+**Archival tree** — immutable evidence, browsable by fund, never queried by
+Athena. Content is written once: a columnar statement covering four funds lands
+under `series=_shared` rather than being duplicated under each, and the section
+row carries the full `series_ids` list so a UI can still group by fund.
 
 ```
-s3://…/filings/cik=…/accession=…/series=…/section=…/{raw.html,text.txt,lineage.json}
+filings/cik=…/accession=…/series=…/section=…/{span:03d}-{offset:08d}.txt
 ```
 
-Analytical Iceberg tables, compacted and partitioned by fiscal period, holding
-the queryable facts. Writing analytics-ready Parquet into the archival tree
-would produce ~700k tiny files per year and make Athena both slow and expensive.
+**Analytical Iceberg tables** — `sections`, `findings`, `holdings`,
+`statement_lines`, partitioned by `fiscal_period`. Iceberg rather than raw
+Parquet because reprocessing is a certainty: superseding one accession is a
+`DELETE … WHERE accession = …` rather than a partition rewrite with a window of
+partial data. Writing analytics-ready Parquet into the archival tree instead
+would produce on the order of 700k tiny files a year.
 
-DynamoDB is the control plane only: run manifests, idempotency, review queue,
-and point lookups. It cannot serve the analytical queries -- no aggregation, no
-joins, no full-text -- so those belong in Athena.
+**Manifest** — the commit marker, written **last**. Rows are idempotent on
+`(accession, pipeline_version)`, so a crash mid-write leaves orphaned rows that
+the next run supersedes; only the manifest marks a filing complete. This
+replaces a transaction, which would not fit — DynamoDB caps `TransactWriteItems`
+at 100 items and Guardian VP Trust alone emits 248 section rows.
+
+DynamoDB is the control plane only: manifests, idempotency, review queue, point
+lookups. It cannot serve the analytical queries — no aggregation, no joins, no
+full-text — so those belong in Athena.
+
+### Three invariants on every row
+
+| | |
+|---|---|
+| `audited` | From the form type. Audited and unaudited figures must never be compared silently. |
+| `aggregate_eligible` | False for master portfolios. Default aggregates filter on it; opting in is explicit. |
+| `pipeline_version` | Lets a reprocess supersede prior rows without a delete step. |
+
+Lineage is a character range into the archived text, verified by test to
+round-trip. Findings carry `method` (`regex` today, `llm` later) and
+`confidence`, so a reviewer can filter by how a conclusion was reached.
