@@ -12,9 +12,16 @@ from typing import Dict, List, Optional
 from typing import Union
 
 from .attribution import TRUSTWIDE_SECTIONS
+from .holdings import extract_holdings, reconcile
 from .htmltables import ParsedDocument
 from .pipeline import FilingAnalysis
-from .records import FindingRecord, Provenance, SectionRecord, StatementLineRecord
+from .records import (
+    FindingRecord,
+    HoldingRecord,
+    Provenance,
+    SectionRecord,
+    StatementLineRecord,
+)
 from .statements import STATEMENT_SECTIONS, extract_line_items
 from .store import Store
 
@@ -56,6 +63,8 @@ class EmitResult:
     sections: int = 0
     findings: int = 0
     statement_lines: int = 0
+    holdings: int = 0
+    reconciliations: List[dict] = field(default_factory=list)
     manifest: Dict[str, object] = field(default_factory=dict)
     skipped: bool = False
 
@@ -184,6 +193,36 @@ def build_findings(analysis: FilingAnalysis) -> List[FindingRecord]:
     return findings
 
 
+#: A schedule whose extracted holdings differ from its own stated total by more
+#: than this is reported as an exception. Extraction that silently disagrees
+#: with the filing is worse than extraction that admits it.
+RECONCILE_TOLERANCE = 0.01
+
+
+def _reconciliation_findings(analysis: FilingAnalysis, checks) -> List[FindingRecord]:
+    findings: List[FindingRecord] = []
+    for check in checks:
+        difference = check["difference"]
+        agreed = difference is not None and difference <= RECONCILE_TOLERANCE
+        name = analysis.header.series.get(check["series_id"], check["series_id"])
+        findings.append(
+            FindingRecord(
+                provenance=_provenance(
+                    analysis, check["series_id"], "schedule_of_investments"
+                ),
+                finding_type="holdings_reconciliation",
+                severity="info" if agreed else "exception",
+                summary=(
+                    f"{name}: extracted holdings total {check['extracted']:,.0f} "
+                    f"against a stated {check['stated']:,.0f} "
+                    f"({difference:.2%} difference)."
+                ),
+                passed=agreed,
+            )
+        )
+    return findings
+
+
 def emit(
     analysis: FilingAnalysis,
     document: Union[str, ParsedDocument],
@@ -267,7 +306,53 @@ def emit(
                     )
             result.statement_lines = store.append_rows("statement_lines", line_rows)
 
+            holding_rows = []
+            for section in analysis.sections:
+                if section.section_type != "schedule_of_investments":
+                    continue
+                if len(section.series_ids) != 1:
+                    continue  # a shared schedule cannot be split by fund
+                series_id = section.series_ids[0]
+                found = extract_holdings(parsed, series_id, section.start, section.end)
+                if not found:
+                    continue
+                extracted, stated, difference = reconcile(
+                    found, text[section.start : section.end]
+                )
+                if stated is not None:
+                    result.reconciliations.append(
+                        {
+                            "series_id": series_id,
+                            "extracted": extracted,
+                            "stated": stated,
+                            "difference": difference,
+                        }
+                    )
+                for holding in found:
+                    holding_rows.append(
+                        HoldingRecord(
+                            provenance=_provenance(
+                                analysis,
+                                series_id=series_id,
+                                section_type=section.section_type,
+                                char_start=holding.char_start,
+                                char_end=holding.char_end,
+                            ),
+                            issuer=holding.issuer,
+                            coupon=holding.coupon,
+                            maturity_date=holding.maturity_date,
+                            shares_or_par=holding.shares_or_par,
+                            value=holding.value,
+                            fair_value_level=3 if "level_3" in holding.flags else None,
+                            flags=holding.flags,
+                            category=holding.category,
+                            aggregate_eligible=series_id not in excluded,
+                        ).to_row()
+                    )
+            result.holdings = store.append_rows("holdings", holding_rows)
+
     findings = build_findings(analysis)
+    findings.extend(_reconciliation_findings(analysis, result.reconciliations))
     result.findings = store.append_rows("findings", [f.to_row() for f in findings])
 
     # Last: the commit marker. Everything above is idempotent and supersedable;

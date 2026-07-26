@@ -10,16 +10,16 @@ and per-fact lineage so a reviewer can always see where a number came from.
 ## Status
 
 Built and validated: **sectioning, classification, audit-coverage
-reconciliation, per-fund attribution, the storage write path, and statement
-line-item extraction**. Holdings extraction and the LLM review stages are not
-yet implemented.
+reconciliation, per-fund attribution, the storage write path, and extraction of
+statement line items and holdings**. The LLM review stages are not yet
+implemented.
 
 Scope is currently annual open-end N-CSR. N-CSRS is classified and carries
 `audited=false` but is not a focus; N-CSR/A and closed-end funds are out of
 scope by decision.
 
 ```
-python3 -m pytest -q                          # 156 tests
+python3 -m pytest -q                          # 165 tests
 python3 -m ncsr.cli DOC.htm HEADER.hdr        # manifest as JSON
 python3 -m ncsr.cli DOC.htm HEADER.hdr --emit ./out
 python3 -m ncsr.cli --ddl s3://bucket/ncsr    # Iceberg DDL
@@ -45,6 +45,7 @@ string, as the SEC requires one.
 | `store` | Storage boundary; `LocalStore` reference implementation |
 | `htmltables` | Offset-preserving HTML parse; table and cell geometry |
 | `statements` | Line items from the financial statements |
+| `holdings` | Schedule-of-investments rows, legend resolution, reconciliation |
 | `emit` | Persist evidence, rows, and the commit marker |
 
 `analyze()` returns a `FilingAnalysis` whose `manifest()` is the payload written
@@ -66,6 +67,9 @@ backfill without a delete step.
 - **3,559 statement line items** extracted across 9 filings. Penn Series'
   Money Market Fund dividend income comes out at **822,559**, matching the
   filing, with Interest and Total Investment Income also exact.
+- **47,246 holdings** extracted. Penn's High Yield Bond Fund reconciles to its
+  own stated total (121,162,999) and, independently, its Rule 144A holdings sum
+  to the stated 99,518,726 -- 81.0% of net assets, matching the filing exactly.
 - 201 MB analyzed in 1.31 s (153 MB/s), peak RSS 292 MB; the table parse adds
   15 s for the same corpus (13 MB/s, largest filing 3.1 s).
 
@@ -175,6 +179,33 @@ only the first numeric column, because a Statement of Changes in Net Assets puts
 the prior period in the second and attributing both to one fund would silently
 double its figures.
 
+## Holdings extraction
+
+A schedule states its own total, which makes extraction self-checking:
+`reconcile()` compares extracted holdings against it and emits a
+`holdings_reconciliation` finding, an exception when they disagree by more than
+1%. Extraction that silently disagrees with the filing is worse than extraction
+that admits it.
+
+Two things make this harder than a table read.
+
+**Footnote symbols are local, not standard.** One filing marks Level 3 with
+`(1)` and 144A with `@`; the set varies between funds *within* one filing. Worse,
+the same symbol is reused with different meanings in one section — Penn's `(1)`
+means "Level 3 security" in the row legend and "internally fair valued at zero"
+in the valuation-hierarchy footnote below it. The legend is therefore parsed
+only from the row-legend region, split into entries at each standalone marker
+and classified by the filing's own wording.
+
+**Not every table in a schedule section is a list of securities.** The
+fair-value hierarchy summary sits inside the same section and its rows are
+asset-class totals (`Corporate Bonds 114,962,448`); reading them as holdings
+roughly doubled the fund's total before they were excluded.
+
+Reading the stated total requires care of its own: `TOTAL INVESTMENTS — 98.6%
+(Cost $117,939,535) $ 121,162,999` gives cost *and* market value, and for an
+equity fund with appreciation they differ by more than twofold.
+
 ## Known limitations
 
 - **Victory Portfolios splits its holdings across the Item 1/Item 7 boundary.**
@@ -192,6 +223,9 @@ double its figures.
   inventing rows, so they yield zero line items. Notably these four are also 4
   of the 5 worst attribution scores, which suggests a shared root cause worth
   investigating before building a second extraction strategy.
+- **Reconciliation coverage is thin.** Only 33 of 564 schedule sections state a
+  total in a form the check recognises. Penn reconciles well (8 exact, 10 within
+  1%, 5 off); other filings word their totals differently and go unchecked.
 - **Guardian yields only 29 line items across 23 funds.** Its per-fund sections
   are found and mapped, but few captions come through. Under-diagnosed.
 - **Comparative prior-period columns are not captured** for single-fund
@@ -216,10 +250,13 @@ double its figures.
    attribution 91% -> 93.4%; master and feeder cleared the review threshold)
 4. ~~Iceberg table definitions and the manifest-commit write path~~ ✅
 5. ~~Offset-preserving HTML parsing; populate `statement_lines`~~ ✅
-6. Holdings extraction: schedule-of-investments rows, footnote legend
-   resolution, fair-value levels.
-7. A `<div>`-layout extraction strategy (4 of 15 filings).
-8. LLM stages: legend normalization, contingency triage, PCAOB judgment.
+6. ~~Holdings extraction: rows, legend resolution, reconciliation~~ ✅
+7. Fair-value hierarchy table as the primary source of Level 3 amounts -- it is
+   already located and excluded from holdings, and states levels per asset class
+   directly.
+8. Broaden reconciliation coverage beyond the 33/564 sections now checked.
+9. A `<div>`-layout extraction strategy (4 of 15 filings).
+10. LLM stages: legend normalization, contingency triage, PCAOB judgment.
 
 ## Storage model
 
