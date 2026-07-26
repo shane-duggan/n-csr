@@ -10,16 +10,16 @@ and per-fact lineage so a reviewer can always see where a number came from.
 ## Status
 
 Built and validated: **sectioning, classification, audit-coverage
-reconciliation, per-fund attribution, and the storage write path**. Table-level
-fact extraction and the LLM review stages are not yet implemented -- the
-`holdings` and `statement_lines` schemas are defined but carry no rows yet.
+reconciliation, per-fund attribution, the storage write path, and statement
+line-item extraction**. Holdings extraction and the LLM review stages are not
+yet implemented.
 
 Scope is currently annual open-end N-CSR. N-CSRS is classified and carries
 `audited=false` but is not a focus; N-CSR/A and closed-end funds are out of
 scope by decision.
 
 ```
-python3 -m pytest -q                          # 126 tests
+python3 -m pytest -q                          # 156 tests
 python3 -m ncsr.cli DOC.htm HEADER.hdr        # manifest as JSON
 python3 -m ncsr.cli DOC.htm HEADER.hdr --emit ./out
 python3 -m ncsr.cli --ddl s3://bucket/ncsr    # Iceberg DDL
@@ -43,6 +43,8 @@ string, as the SEC requires one.
 | `records` | Row shapes and lineage for the analytical tables |
 | `ddl` | Athena/Iceberg table definitions |
 | `store` | Storage boundary; `LocalStore` reference implementation |
+| `htmltables` | Offset-preserving HTML parse; table and cell geometry |
+| `statements` | Line items from the financial statements |
 | `emit` | Persist evidence, rows, and the commit marker |
 
 `analyze()` returns a `FilingAnalysis` whose `manifest()` is the payload written
@@ -61,7 +63,11 @@ backfill without a delete step.
   9 of 12 filings clear the 85% review threshold, the rest are flagged.
 - Section counts exact on every filing, including Guardian VP Trust's 24
   concatenated per-fund reports.
-- 201 MB analyzed in 1.31 s (153 MB/s), peak RSS 292 MB.
+- **3,559 statement line items** extracted across 9 filings. Penn Series'
+  Money Market Fund dividend income comes out at **822,559**, matching the
+  filing, with Interest and Total Investment Income also exact.
+- 201 MB analyzed in 1.31 s (153 MB/s), peak RSS 292 MB; the table parse adds
+  15 s for the same corpus (13 MB/s, largest filing 3.1 s).
 
 Attribution quality per filing, with anything below 85% routed to review:
 
@@ -149,6 +155,26 @@ miss.
 Scale check: "Master Portfolio" appears in roughly 30 of 1,175 N-CSRs in a
 six-month window — about 2–3% of filings.
 
+## Table extraction
+
+Sectioning works on flattened text, but table extraction needs cell structure,
+which flattening destroys. `htmltables` rebuilds the *same* text while streaming
+the markup, recording where each table and cell lands -- so offsets agree by
+construction rather than by re-matching. The invariant `parse(markup).text ==
+textify(markup)` is asserted against all 15 filings; if it ever breaks, every
+stored offset silently points at the wrong text.
+
+Stdlib `html.parser` is used deliberately: no native dependency to package for
+Lambda, and streaming gives exact control over how the text is assembled.
+
+Fund identity comes from the *column*, not the row. Penn reports four funds side
+by side in one Statement of Operations, so the column map is read from the
+table's own header row. Filings that give each fund its own section (Guardian)
+name it in a banner instead, and fall back to section attribution -- mapping
+only the first numeric column, because a Statement of Changes in Net Assets puts
+the prior period in the second and attributing both to one fund would silently
+double its figures.
+
 ## Known limitations
 
 - **Victory Portfolios splits its holdings across the Item 1/Item 7 boundary.**
@@ -160,6 +186,16 @@ six-month window — about 2–3% of filings.
   more general heuristics. Flagged `needs_review`.
 - **Guggenheim (62.9%)** leaves large stretches unattributed within a single
   report. Not yet diagnosed. Flagged `needs_review`.
+- **Four filings lay financial data out in `<div>`, not `<table>`.** BlackRock
+  uses 92,357 `<div>` against 1,750 `<td>`; Guggenheim, Templeton and Victory
+  are the same shape. Statement extraction declines on them rather than
+  inventing rows, so they yield zero line items. Notably these four are also 4
+  of the 5 worst attribution scores, which suggests a shared root cause worth
+  investigating before building a second extraction strategy.
+- **Guardian yields only 29 line items across 23 funds.** Its per-fund sections
+  are found and mapped, but few captions come through. Under-diagnosed.
+- **Comparative prior-period columns are not captured** for single-fund
+  statements -- see *Table extraction*.
 - **Master-feeder look-through is detected but not yet enforced.** The
   relationship is extracted (see below) and masters are marked
   `aggregate_excluded_series`, but nothing consumes that flag until the fact
@@ -179,10 +215,11 @@ six-month window — about 2–3% of filings.
 3. ~~Split multi-report Item 7 spans at report boundaries~~ ✅ (corpus
    attribution 91% -> 93.4%; master and feeder cleared the review threshold)
 4. ~~Iceberg table definitions and the manifest-commit write path~~ ✅
-5. Table-level extraction with offset-preserving HTML parsing, populating
-   `holdings` and `statement_lines`.
-6. LLM stages: legend normalization, contingency triage, PCAOB judgment.
-7. Diagnose Victory and Guggenheim attribution (see *Known limitations*).
+5. ~~Offset-preserving HTML parsing; populate `statement_lines`~~ ✅
+6. Holdings extraction: schedule-of-investments rows, footnote legend
+   resolution, fair-value levels.
+7. A `<div>`-layout extraction strategy (4 of 15 filings).
+8. LLM stages: legend normalization, contingency triage, PCAOB judgment.
 
 ## Storage model
 

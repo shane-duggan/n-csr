@@ -3,6 +3,8 @@
 from .header import Header, parse_header
 from .pipeline import PIPELINE_VERSION, FilingAnalysis, FilingKind, analyze, classify
 from .emit import emit
+from .htmltables import ParsedDocument, Table, parse
+from .statements import extract_line_items
 from .records import (
     FindingRecord,
     HoldingRecord,
@@ -24,6 +26,10 @@ __all__ = [
     "Span",
     "find_item7_spans",
     "emit",
+    "parse",
+    "ParsedDocument",
+    "Table",
+    "extract_line_items",
     "Store",
     "LocalStore",
     "Provenance",

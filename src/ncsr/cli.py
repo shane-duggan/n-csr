@@ -14,7 +14,7 @@ import sys
 
 from .ddl import create_all
 from .emit import emit
-from .normalize import textify
+from .htmltables import parse
 from .pipeline import analyze
 from .store import LocalStore
 
@@ -54,11 +54,12 @@ def main(argv=None) -> int:
 
     if args.emit:
         markup = _read(args.document)
-        outcome = emit(result, textify(markup), LocalStore(args.emit))
+        outcome = emit(result, parse(markup), LocalStore(args.emit))
         payload["emitted"] = {
             "objects": outcome.objects,
             "sections": outcome.sections,
             "findings": outcome.findings,
+            "statement_lines": outcome.statement_lines,
             "skipped": outcome.skipped,
         }
 

@@ -9,9 +9,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
+from typing import Union
+
 from .attribution import TRUSTWIDE_SECTIONS
+from .htmltables import ParsedDocument
 from .pipeline import FilingAnalysis
-from .records import FindingRecord, Provenance, SectionRecord
+from .records import FindingRecord, Provenance, SectionRecord, StatementLineRecord
+from .statements import STATEMENT_SECTIONS, extract_line_items
 from .store import Store
 
 #: Path segments used when a section belongs to no single fund.
@@ -51,6 +55,7 @@ class EmitResult:
     objects: int = 0
     sections: int = 0
     findings: int = 0
+    statement_lines: int = 0
     manifest: Dict[str, object] = field(default_factory=dict)
     skipped: bool = False
 
@@ -181,11 +186,18 @@ def build_findings(analysis: FilingAnalysis) -> List[FindingRecord]:
 
 def emit(
     analysis: FilingAnalysis,
-    text: str,
+    document: Union[str, ParsedDocument],
     store: Store,
     force: bool = False,
 ) -> EmitResult:
-    """Persist a filing. Returns counts; a no-op when already processed."""
+    """Persist a filing. Returns counts; a no-op when already processed.
+
+    ``document`` may be the normalized text or a ``ParsedDocument``. Statement
+    line items require the parsed form, since they need table geometry; passing
+    plain text writes evidence, sections and findings only.
+    """
+    parsed = document if isinstance(document, ParsedDocument) else None
+    text = parsed.text if parsed is not None else document
     accession = analysis.header.accession or ""
 
     if not force and store.is_processed(accession, analysis.pipeline_version):
@@ -225,6 +237,35 @@ def emit(
                 ).to_row()
             )
         result.sections = store.append_rows("sections", section_rows)
+
+        if parsed is not None:
+            line_rows = []
+            for section in analysis.sections:
+                if section.section_type not in STATEMENT_SECTIONS:
+                    continue
+                for item in extract_line_items(
+                    parsed,
+                    analysis.header.series,
+                    section.start,
+                    section.end,
+                    section.series_ids,
+                ):
+                    line_rows.append(
+                        StatementLineRecord(
+                            provenance=_provenance(
+                                analysis,
+                                series_id=item.series_id,
+                                section_type=section.section_type,
+                                char_start=item.char_start,
+                                char_end=item.char_end,
+                            ),
+                            caption=item.caption,
+                            value=item.value,
+                            column_index=item.column_index,
+                            aggregate_eligible=item.series_id not in excluded,
+                        ).to_row()
+                    )
+            result.statement_lines = store.append_rows("statement_lines", line_rows)
 
     findings = build_findings(analysis)
     result.findings = store.append_rows("findings", [f.to_row() for f in findings])
