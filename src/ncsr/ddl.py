@@ -64,6 +64,13 @@ _TABLES: Dict[str, Sequence[Tuple[str, str]]] = {
         ("category", "string"),
         ("aggregate_eligible", "boolean"),
     ),
+    "fair_value_levels": (
+        ("category", "string"),
+        ("level", "int"),
+        ("amount", "string"),
+        ("is_total_row", "boolean"),
+        ("aggregate_eligible", "boolean"),
+    ),
     "statement_lines": (
         ("caption", "string"),
         ("value", "string"),
@@ -117,17 +124,22 @@ def supersede(table: str, accession: str, database: str = DATABASE) -> str:
     )
 
 
-#: Reference query. Default holdings aggregates must filter on
-#: ``aggregate_eligible`` or master-feeder pairs are counted twice.
+#: Reference query for "which funds hold the most Level 3 securities".
+#:
+#: Sourced from the fund's own fair-value hierarchy disclosure rather than from
+#: per-security footnote symbols, which are filing-local and ambiguous. The
+#: total row is excluded so it is not summed with the asset-class rows it
+#: totals.
 LEVEL_3_BY_FUND = """
 SELECT series_id,
-       count(*)                        AS level_3_positions,
-       sum(try_cast(value AS double))  AS level_3_value
-FROM {database}.holdings
+       sum(try_cast(amount AS double)) AS level_3_value
+FROM {database}.fair_value_levels
 WHERE fiscal_period = ?
-  AND fair_value_level = 3
+  AND level = 3
+  AND NOT is_total_row            -- do not double count the total row
   AND aggregate_eligible          -- look-through: excludes master portfolios
   AND audited                     -- never mix audited and unaudited figures
 GROUP BY series_id
+HAVING sum(try_cast(amount AS double)) > 0
 ORDER BY level_3_value DESC
 """

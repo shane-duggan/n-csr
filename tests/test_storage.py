@@ -12,6 +12,7 @@ from ncsr.emit import build_findings, emit
 from ncsr.normalize import textify
 from ncsr.pipeline import analyze
 from ncsr.records import (
+    FairValueRecord,
     FindingRecord,
     HoldingRecord,
     Provenance,
@@ -42,6 +43,7 @@ PROVENANCE = Provenance(
         ("findings", FindingRecord(PROVENANCE, "t", "info", "s").to_row()),
         ("holdings", HoldingRecord(PROVENANCE, "Acme Corp").to_row()),
         ("statement_lines", StatementLineRecord(PROVENANCE, "Dividends").to_row()),
+        ("fair_value_levels", FairValueRecord(PROVENANCE, "Corporate Bonds", 3, "0").to_row()),
     ],
 )
 def test_ddl_matches_row_shape(table, row):
@@ -54,7 +56,7 @@ def test_ddl_matches_row_shape(table, row):
 def test_reserved_words_are_not_used_as_columns():
     """`end`, `start`, `order` and friends are reserved in Trino/Athena."""
     reserved = {"end", "start", "order", "group", "table", "select", "from"}
-    for table in ("sections", "findings", "holdings", "statement_lines"):
+    for table in TABLES:
         assert not {n for n, _ in ddl.columns(table)} & reserved
 
 
@@ -63,10 +65,15 @@ def test_fiscal_period_partition_derivation():
     assert Provenance("a", "c", "", 1, True).fiscal_period == "unknown"
 
 
+TABLES = ("sections", "findings", "holdings", "statement_lines", "fair_value_levels")
+
+
 def test_every_table_is_iceberg_and_partitioned():
     sql = ddl.create_all("s3://bucket/ncsr")
-    assert sql.count("'table_type' = 'ICEBERG'") == 4
-    assert sql.count("PARTITIONED BY (fiscal_period)") == 4
+    assert sql.count("'table_type' = 'ICEBERG'") == len(TABLES)
+    assert sql.count("PARTITIONED BY (fiscal_period)") == len(TABLES)
+    for table in TABLES:
+        assert f"ncsr.{table} (" in sql
 
 
 # --------------------------------------------------------------------------

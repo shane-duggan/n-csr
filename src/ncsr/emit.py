@@ -12,10 +12,12 @@ from typing import Dict, List, Optional
 from typing import Union
 
 from .attribution import TRUSTWIDE_SECTIONS
+from .fairvalue import extract_hierarchy
 from .holdings import extract_holdings, reconcile
 from .htmltables import ParsedDocument
 from .pipeline import FilingAnalysis
 from .records import (
+    FairValueRecord,
     FindingRecord,
     HoldingRecord,
     Provenance,
@@ -64,7 +66,9 @@ class EmitResult:
     findings: int = 0
     statement_lines: int = 0
     holdings: int = 0
+    fair_value_levels: int = 0
     reconciliations: List[dict] = field(default_factory=list)
+    hierarchy_discrepancies: List[dict] = field(default_factory=list)
     manifest: Dict[str, object] = field(default_factory=dict)
     skipped: bool = False
 
@@ -351,8 +355,67 @@ def emit(
                     )
             result.holdings = store.append_rows("holdings", holding_rows)
 
+            level_rows = []
+            for section in analysis.sections:
+                if section.section_type != "schedule_of_investments":
+                    continue
+                if len(section.series_ids) != 1:
+                    continue
+                series_id = section.series_ids[0]
+                hierarchy = extract_hierarchy(
+                    parsed, series_id, section.start, section.end
+                )
+                if hierarchy is None:
+                    continue
+                for category, got, expected in hierarchy.discrepancies:
+                    result.hierarchy_discrepancies.append(
+                        {
+                            "series_id": series_id,
+                            "category": category,
+                            "levels_sum": got,
+                            "stated": expected,
+                        }
+                    )
+                for entry in hierarchy.amounts:
+                    level_rows.append(
+                        FairValueRecord(
+                            provenance=_provenance(
+                                analysis,
+                                series_id=series_id,
+                                section_type=section.section_type,
+                                char_start=entry.char_start,
+                                char_end=entry.char_end,
+                            ),
+                            category=entry.category,
+                            level=entry.level,
+                            amount=entry.amount,
+                            is_total_row=entry.is_total_row,
+                            aggregate_eligible=series_id not in excluded,
+                        ).to_row()
+                    )
+            result.fair_value_levels = store.append_rows(
+                "fair_value_levels", level_rows
+            )
+
     findings = build_findings(analysis)
     findings.extend(_reconciliation_findings(analysis, result.reconciliations))
+    for issue in result.hierarchy_discrepancies:
+        name = analysis.header.series.get(issue["series_id"], issue["series_id"])
+        findings.append(
+            FindingRecord(
+                provenance=_provenance(
+                    analysis, issue["series_id"], "schedule_of_investments"
+                ),
+                finding_type="fair_value_hierarchy_inconsistent",
+                severity="exception",
+                summary=(
+                    f"{name}: {issue['category']} levels sum to "
+                    f"{issue['levels_sum']:,.0f} against a stated "
+                    f"{issue['stated']:,.0f}."
+                ),
+                passed=False,
+            )
+        )
     result.findings = store.append_rows("findings", [f.to_row() for f in findings])
 
     # Last: the commit marker. Everything above is idempotent and supersedable;

@@ -19,7 +19,7 @@ Scope is currently annual open-end N-CSR. N-CSRS is classified and carries
 scope by decision.
 
 ```
-python3 -m pytest -q                          # 165 tests
+python3 -m pytest -q                          # 178 tests
 python3 -m ncsr.cli DOC.htm HEADER.hdr        # manifest as JSON
 python3 -m ncsr.cli DOC.htm HEADER.hdr --emit ./out
 python3 -m ncsr.cli --ddl s3://bucket/ncsr    # Iceberg DDL
@@ -46,6 +46,7 @@ string, as the SEC requires one.
 | `htmltables` | Offset-preserving HTML parse; table and cell geometry |
 | `statements` | Line items from the financial statements |
 | `holdings` | Schedule-of-investments rows, legend resolution, reconciliation |
+| `fairvalue` | Fair-value hierarchy table; Level 1/2/3 per asset class |
 | `emit` | Persist evidence, rows, and the commit marker |
 
 `analyze()` returns a `FilingAnalysis` whose `manifest()` is the payload written
@@ -70,6 +71,8 @@ backfill without a delete step.
 - **47,246 holdings** extracted. Penn's High Yield Bond Fund reconciles to its
   own stated total (121,162,999) and, independently, its Rule 144A holdings sum
   to the stated 99,518,726 -- 81.0% of net assets, matching the filing exactly.
+- **1,332 fair-value rows** across 36 funds, every table self-consistent: on
+  each row the levels sum to the stated total.
 - 201 MB analyzed in 1.31 s (153 MB/s), peak RSS 292 MB; the table parse adds
   15 s for the same corpus (13 MB/s, largest filing 3.1 s).
 
@@ -206,6 +209,27 @@ Reading the stated total requires care of its own: `TOTAL INVESTMENTS — 98.6%
 (Cost $117,939,535) $ 121,162,999` gives cost *and* market value, and for an
 equity fund with appreciation they differ by more than twofold.
 
+## Level 3 exposure
+
+`fair_value_levels` is the authoritative source, not the per-security footnote
+flags. Funds disclose Level 1/2/3 amounts per asset class directly, so the
+figure comes from the filing's own arithmetic rather than from resolving
+filing-local symbols. `ddl.LEVEL_3_BY_FUND` is the reference query.
+
+The table is self-checking — levels must sum to the stated total on every row —
+and a failure raises a `fair_value_hierarchy_inconsistent` exception rather than
+being silently believed. Every table in the corpus currently reconciles.
+
+Two distinctions the extractor preserves:
+
+- **A dash is a disclosed zero.** `Level 3: —` is the fund affirming it holds
+  nothing at Level 3, which is a different fact from having said nothing. 33 of
+  36 funds affirm zero; Penn's Large Growth Stock Fund holds 579,833 in Level 3
+  preferred stocks.
+- **A grand total is not a subtotal.** A hierarchy table may carry several rows
+  beginning "Total"; taking the first reported an asset-class subtotal as the
+  fund-wide figure.
+
 ## Known limitations
 
 - **Victory Portfolios splits its holdings across the Item 1/Item 7 boundary.**
@@ -251,9 +275,7 @@ equity fund with appreciation they differ by more than twofold.
 4. ~~Iceberg table definitions and the manifest-commit write path~~ ✅
 5. ~~Offset-preserving HTML parsing; populate `statement_lines`~~ ✅
 6. ~~Holdings extraction: rows, legend resolution, reconciliation~~ ✅
-7. Fair-value hierarchy table as the primary source of Level 3 amounts -- it is
-   already located and excluded from holdings, and states levels per asset class
-   directly.
+7. ~~Fair-value hierarchy table as the primary source of Level 3 amounts~~ ✅
 8. Broaden reconciliation coverage beyond the 33/564 sections now checked.
 9. A `<div>`-layout extraction strategy (4 of 15 filings).
 10. LLM stages: legend normalization, contingency triage, PCAOB judgment.

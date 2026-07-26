@@ -190,3 +190,35 @@ class StatementLineRecord:
                 "aggregate_eligible": self.aggregate_eligible,
             },
         )
+
+
+@dataclass(frozen=True)
+class FairValueRecord:
+    """One asset class at one fair-value hierarchy level.
+
+    The authoritative source for Level 3 exposure: disclosed directly by the
+    fund rather than inferred from per-security footnote symbols. A dash in the
+    filing is a disclosed zero, so ``amount`` of "0" means the fund affirmed it
+    holds nothing at that level -- distinct from having said nothing at all.
+    """
+
+    provenance: Provenance
+    category: str
+    level: int
+    amount: str
+    aggregate_eligible: bool = True
+    #: True for the table's own total row, which must not be summed with the
+    #: asset-class rows above it.
+    is_total_row: bool = False
+
+    def to_row(self) -> Dict[str, Any]:
+        return _flatten(
+            self.provenance,
+            {
+                "category": self.category,
+                "level": self.level,
+                "amount": self.amount,
+                "is_total_row": self.is_total_row,
+                "aggregate_eligible": self.aggregate_eligible,
+            },
+        )
