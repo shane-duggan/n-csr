@@ -84,6 +84,17 @@ _ANY_HEADING = re.compile(
 # INVESTMENTS" is a heading even though "Fund" ends in lowercase letters.
 _PROSE_BEFORE = re.compile(r"(?:(?:^|\s)[a-z]{2,}|,)\s*$")
 
+# A cross-reference to another section, not a heading for one. Filings print
+# "See notes to financial statements." as a footer on every page of a schedule,
+# and it is capitalized, so case alone does not distinguish it. Reading those
+# footers as headings gave each schedule page a tiny section followed by a notes
+# section that swallowed the holdings -- Victory's Item 7 came out 78% notes and
+# 4% schedules, with the securities inside the notes.
+_CROSS_REFERENCE = re.compile(
+    r"(?:^|\s)(?:see|refer\s+to|in|per|the)\s+(?:the\s+)?(?:accompanying\s+)?$",
+    re.I,
+)
+
 # A heading may be followed by a lowercase connector before its date
 # ("Statement of Assets and Liabilities as of December 31, 2025"), so only a
 # lowercase word that is *not* such a connector signals prose.
@@ -96,6 +107,8 @@ _PROSE_AFTER = re.compile(r"^\s*(?!as\b|at\b)[a-z]{2,}")
 def _is_heading(text: str, match: re.Match, floor: int, ceiling: int) -> bool:
     before = text[max(floor, match.start() - 40) : match.start()]
     after = text[match.end() : min(ceiling, match.end() + 40)]
+    if _CROSS_REFERENCE.search(before):
+        return False
     return not (_PROSE_BEFORE.search(before) or _PROSE_AFTER.match(after))
 
 

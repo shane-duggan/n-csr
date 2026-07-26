@@ -198,6 +198,10 @@ def test_feeder_holdings_are_marked_aggregate_eligible(tmp_path):
 
 
 def test_low_attribution_filings_emit_a_review_finding():
-    document, header = load(BY_LABEL["victory"])
-    findings = build_findings(analyze(document, header))
+    """Weak attribution must surface as a finding rather than flow downstream.
+    The semi-annual filing is the remaining case in the corpus."""
+    document, header = load(BY_LABEL["semiannual"])
+    analysis = analyze(document, header)
+    assert analysis.needs_review
+    findings = build_findings(analysis)
     assert any(f.finding_type == "attribution_quality" for f in findings)

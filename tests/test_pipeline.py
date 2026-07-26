@@ -148,19 +148,17 @@ def test_full_corpus_reconciles(analyses):
 # attribution (milestone 2)
 # --------------------------------------------------------------------------
 
-#: Filings whose attribution is currently below threshold and therefore routed
-#: to review. Victory concatenates four complete reports inside one Item 7 span,
-#: so its opinion sections run through report boundaries; Guggenheim and the
-#: master/feeder pair leave large stretches unattributed. Tracked as a known
-#: gap, not silently accepted -- see README "Known limitations".
-KNOWN_LOW_ATTRIBUTION = {"gugg", "victory", "blackrock"}
+#: Every annual filing now clears the review threshold. Kept as an explicit
+#: empty set so a regression names the filing that fell below it rather than
+#: quietly widening an allowance.
+KNOWN_LOW_ATTRIBUTION: set = set()
 
 #: Per-filing attribution floors. Pinned so a regression shows up as a specific
 #: filing getting worse rather than a corpus average drifting quietly.
 COVERAGE_FLOOR = {
-    "penn": 0.98, "guard": 0.98, "gugg": 0.62, "imst": 0.94,
-    "templeton": 0.89, "blackrock": 0.82, "victory": 0.35, "nlfund": 0.94,
-    "voya": 1.0, "consolidated": 1.0, "master": 0.95, "feeder": 0.88,
+    "penn": 0.98, "guard": 0.98, "gugg": 0.90, "imst": 0.94,
+    "templeton": 0.89, "blackrock": 0.99, "victory": 0.94, "nlfund": 0.94,
+    "voya": 0.99, "consolidated": 0.99, "master": 0.95, "feeder": 0.88,
 }
 
 
@@ -274,3 +272,27 @@ def test_corpus_attribution_improved_by_report_splitting(analyses):
     specific = sum(analyses[f.label].fund_specific_chars for f in ANNUAL)
     attributed = sum(analyses[f.label].attributed_chars for f in ANNUAL)
     assert attributed / specific >= 0.93
+
+
+def test_page_footers_are_not_read_as_section_headings(analyses):
+    """"See notes to financial statements." prints on every page of a schedule.
+    Reading it as a heading gave each page a tiny schedule section followed by a
+    notes section that swallowed the holdings."""
+    for label in ("victory", "gugg"):
+        result = analyses[label]
+        by_type = {}
+        for section in result.sections:
+            by_type[section.section_type] = (
+                by_type.get(section.section_type, 0) + section.length
+            )
+        schedules = by_type.get("schedule_of_investments", 0)
+        notes = by_type.get("notes_to_financial_statements", 0)
+        assert schedules > notes, (
+            f"{label}: notes ({notes:,}) should not exceed schedules ({schedules:,})"
+        )
+
+
+def test_corpus_attribution_after_footer_fix(analyses):
+    specific = sum(analyses[f.label].fund_specific_chars for f in ANNUAL)
+    attributed = sum(analyses[f.label].attributed_chars for f in ANNUAL)
+    assert attributed / specific >= 0.95

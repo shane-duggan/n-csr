@@ -19,7 +19,7 @@ Scope is currently annual open-end N-CSR. N-CSRS is classified and carries
 scope by decision.
 
 ```
-python3 -m pytest -q                          # 183 tests
+python3 -m pytest -q                          # 185 tests
 python3 -m ncsr.cli DOC.htm HEADER.hdr        # manifest as JSON
 python3 -m ncsr.cli DOC.htm HEADER.hdr --emit ./out
 python3 -m ncsr.cli --ddl s3://bucket/ncsr    # Iceberg DDL
@@ -62,8 +62,8 @@ backfill without a delete step.
 - **101/101** series reconciled to an audit opinion across 13 open-end N-CSRs.
 - **100/101** series located with a holdings schedule. The one absence is
   genuine: BlackRock Cash Funds: Treasury is a feeder holding master shares.
-- **93.4%** of fund-specific content attributed to a named fund corpus-wide;
-  9 of 12 filings clear the 85% review threshold, the rest are flagged.
+- **95.9%** of fund-specific content attributed to a named fund corpus-wide.
+  Every annual filing clears the 85% review threshold.
 - Section counts exact on every filing, including Guardian VP Trust's 24
   concatenated per-fund reports.
 - **3,559 statement line items** extracted across 9 filings. Penn Series'
@@ -83,12 +83,12 @@ Attribution quality per filing, with anything below 85% routed to review:
 
 | | coverage | | coverage |
 |---|---:|---|---:|
-| voya, consolidated | 100% | imst | 94.1% |
-| guard | 98.6% | templeton | 89.3% |
-| penn | 98.5% | feeder | 88.6% |
-| master | 95.5% | blackrock | 82.9% ⚠ |
-| nlfund | 94.2% | gugg | 62.9% ⚠ |
-| | | victory | 35.5% ⚠ |
+| voya, consolidated | 100% | victory | 94.8% |
+| blackrock | 99.5% | nlfund | 94.2% |
+| guard | 98.6% | imst | 94.1% |
+| penn | 98.5% | gugg | 90.7% |
+| master | 95.4% | templeton | 89.3% |
+| | | feeder | 88.5% |
 
 Performance means the sectioning stage is nowhere near the Lambda 15-minute
 limit; a survey of 290 filings put the size distribution at p50 1.3 MB, p90
@@ -203,6 +203,14 @@ in the valuation-hierarchy footnote below it. The legend is therefore parsed
 only from the row-legend region, split into entries at each standalone marker
 and classified by the filing's own wording.
 
+**A page footer is not a section heading.** Filings print "See notes to
+financial statements." at the foot of every schedule page. It is capitalized, so
+case alone does not distinguish it from a heading, and reading it as one gave
+each schedule page a tiny section followed by a notes section that swallowed the
+holdings. Victory's Item 7 came out 78% notes and 4% schedules with the
+securities inside the notes; rejecting cross-reference lead-ins moved its
+attribution from 35.5% to 94.8% and Guggenheim's from 62.9% to 90.7%.
+
 **Not every table in a schedule section is a list of securities.** The
 fair-value hierarchy summary sits inside the same section and its rows are
 asset-class totals (`Corporate Bonds 114,962,448`); reading them as holdings
@@ -278,20 +286,11 @@ filings.
 
 ## Known limitations
 
-- **Victory Portfolios splits its holdings across the Item 1/Item 7 boundary.**
-  86 of its 145 "Schedule of Portfolio Investments" occurrences sit *outside*
-  the Item 7 spans, starting at offset 253,788 while Item 7 opens at 552,393 --
-  so its Item 7 is 78% notes and only 4% holdings. Report splitting (below) did
-  not move its coverage, because the content is not in the span at all. This is
-  a span-boundary question specific to that filer and needs a targeted look, not
-  more general heuristics. Flagged `needs_review`.
-- **Guggenheim (62.9%)** leaves large stretches unattributed within a single
-  report. Not yet diagnosed. Flagged `needs_review`.
-- **Guggenheim and Victory yield no holdings**, but not because of their
-  layout: their schedule sections are 546 and 117 characters, so the holdings
-  are not inside the sections at all. They are blocked by the attribution gap
-  above, and BlackRock -- the same `<div>` layout with better attribution --
-  extracts 1,578 holdings fine.
+- **The semi-annual filing sits at 70.4% attribution** and is flagged
+  `needs_review`. It is the only filing in the corpus below the threshold.
+- **Guggenheim yields no holdings** despite 90.7% attribution. Victory, the same
+  shape, now yields 1,372 after the footer fix, so this is a remaining
+  filing-specific gap rather than a structural one.
 - **23 of 62 reconciled funds still disagree**, in three groups: a stated total
   that is really a minor trailing total (Guardian, ratio ~1000x), over-extraction
   (Blackstone, RiverNorth, ratio 2-3.5x), and under-extraction where few
@@ -325,8 +324,8 @@ filings.
 7. ~~Fair-value hierarchy table as the primary source of Level 3 amounts~~ ✅
 8. ~~Broaden reconciliation coverage~~ ✅ (33 sections -> 62 funds, 63% agreeing)
 9. ~~A `<div>`-layout extraction strategy~~ ✅ (geometry reconstruction)
-10. Diagnose Guggenheim and Victory attribution, which now blocks their
-    extraction end to end.
+10. ~~Diagnose Guggenheim and Victory attribution~~ ✅ (page-footer fix; corpus
+    attribution 93.4% -> 95.9%)
 11. LLM stages: legend normalization, contingency triage, PCAOB judgment.
 
 ## Storage model
